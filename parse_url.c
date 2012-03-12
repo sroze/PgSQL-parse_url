@@ -26,12 +26,12 @@ PG_MODULE_MAGIC;
 PG_FUNCTION_INFO_V1(parse_url_key);
 Datum parse_url_key (PG_FUNCTION_ARGS)
 {
-	url_internal *varlena = PG_GETARG_URL_P(0);
+	char *str = TextDatumGetCString(PG_GETARG_TEXT_P(0));
 	char *key = TextDatumGetCString(PG_GETARG_TEXT_P(1));
 	char *ret = NULL;
 	int ret_length = 0;
 
-	url *url_ret = url_from_varlena(varlena);
+	url *url_ret = parse_url_exec(str);
 
 	if (strcmp(key, "scheme") == 0) {
 		ret = url_ret->scheme;
@@ -99,6 +99,10 @@ char *portToString (unsigned port)
 PG_FUNCTION_INFO_V1(parse_url_record);
 Datum parse_url_record (PG_FUNCTION_ARGS)
 {
+	// Vars about the params
+	//text *str2 = PG_GETARG_TEXT_P(0);
+	char* str = TextDatumGetCString(PG_GETARG_TEXT_P(0));
+
 	// Some vars which will used to create the composite output type
 	TupleDesc	tupdesc;
 	char		**values;
@@ -106,14 +110,13 @@ Datum parse_url_record (PG_FUNCTION_ARGS)
 	AttInMetadata *attinmeta;
 	bool		nulls[8];
 	url 		*ret;
-	url_internal *varlena = PG_GETARG_URL_P(0);
 
 	// Check NULLs values
 	if(PG_ARGISNULL(0) || PG_ARGISNULL(1)) {
 		PG_RETURN_NULL();
 	}
 
-	ret = url_from_varlena(varlena);
+	ret = parse_url_exec(str);
 
 	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE) {
 	    ereport(ERROR,
@@ -388,342 +391,4 @@ char *_url_alloc_str (const char *s, int length)
 void _url_free_str (const char *s)
 {
 	pfree((void *) s);
-}
-
-PG_FUNCTION_INFO_V1(url_in);
-Datum url_in (PG_FUNCTION_ARGS)
-{
-	char *str = PG_GETARG_CSTRING(0);
-	url *object = parse_url_exec(str);
-
-	url_internal *varlena_url = url_to_varlena(object);
-
-#ifdef DEBUG
-  elog(NOTICE, "url_in| str=%s", str);
-  elog(NOTICE, "url_in: url_parsed. host=%s, path=%s", object->host, object->path);
-  elog(NOTICE, "url_in: varlened (%d/%d)", (int) sizeof(varlena_url), (int) sizeof(url_internal));
-  elog(NOTICE, "url_in: %d %d", varlena_url->host, varlena_url->host_len);
-#endif
-
-	PG_RETURN_URL_P(varlena_url);
-}
-
-PG_FUNCTION_INFO_V1(url_out);
-Datum url_out (PG_FUNCTION_ARGS)
-{
-	url_internal *varlena = PG_GETARG_URL_P(0);
-	int size = url_internal_size(varlena, URL_SIZE_CONTENTS_OUT);
-	char *t = palloc(size), *u = palloc(size), *out = palloc(size + 1);
-
-	memset(out, 0, size+1);
-
-#ifdef DEBUG
-  elog(NOTICE, "url_out (%d)", (int) sizeof(varlena));
-  elog(NOTICE, "url_out (%d)", size);
-  elog(NOTICE, "url_out: varlena->data=%s varlena->host=%d", varlena->data, varlena->host);
-#endif
-
-	if (varlena->scheme_len) {
-		memset(t, 0, size);
-		memcpy(t, (void *) (varlena->data + varlena->scheme), varlena->scheme_len);
-		strcat(t, "://");
-		strcat(out, t);
-	}
-	if (varlena->user_len) {
-		memset(t, 0, size);
-		memset(u, 0, size);
-		memcpy(t, (void *) (varlena->data + varlena->user), varlena->user_len);
-		if (varlena->pass_len) {
-			strcat(t, ":");
-			memcpy(u, (void *) (varlena->data + varlena->pass), varlena->pass_len);
-			strcat(t, u);
-		}
-		strcat(t, "@");
-		strcat(out, t);
-	}
-	if (varlena->host_len) {
-		memset(t, 0, size);
-		memcpy(t, (void *) (varlena->data + varlena->host), varlena->host_len);
-		strcat(out, t);
-	}
-	if (varlena->port_len) {
-		memset(t, 0, size);
-		memset(u, 0, size);
-		memcpy(t, ":", 1);
-		memcpy(u, (void *) (varlena->data + varlena->port), varlena->port_len);
-		strcat(t, u);
-		strcat(out, t);
-	}
-	if (varlena->path_len) {
-		memset(t, 0, size);
-		memcpy(t, (void *) (varlena->data + varlena->path), varlena->path_len);
-		strcat(out, t);
-	}
-	if (varlena->query_len) {
-		memset(t, 0, size);
-		memset(u, 0, size);
-		memcpy(t, "?", 1);
-		memcpy(u, (void *) (varlena->data + varlena->query), varlena->query_len);
-		strcat(t, u);
-		strcat(out, t);
-	}
-	if (varlena->fragment_len) {
-		memset(t, 0, size);
-		memset(u, 0, size);
-		memcpy(t, "#", 1);
-		memcpy(u, (void *) (varlena->data + varlena->fragment), varlena->fragment_len);
-		strcat(t, u);
-		strcat(out, t);
-	}
-
-	pfree(t);
-	pfree(u);
-
-#ifdef DEBUG
-  elog(NOTICE, "url_out: out=%s", out);
-#endif
-
-	PG_RETURN_CSTRING(out);
-}
-
-url_internal* url_to_varlena (url *object)
-{
-	int size = url_size(object, URL_SIZE_CONTENTS_OUT);
-	char *data = palloc(size), *port_str;
-	url_internal *varlena = palloc(sizeof(url_internal) + size);
-
-#ifdef DEBUG
-  elog(NOTICE, "url_to_varlena: object->host=%s", object->host);
-  elog(NOTICE, "url_to_varlena: size=%d", size);
-#endif
-
-	memset(varlena, 0, sizeof(url_internal) + size);
-	memset(data, 0, size);
-
-	if (object->scheme) {
-		varlena->scheme = strlen(data);
-		varlena->scheme_len = strlen(object->scheme);
-		strcat(data, object->scheme);
-	}
-	if (object->user) {
-		varlena->user = strlen(data);
-		varlena->user_len = strlen(object->user);
-		strcat(data, object->user);
-		if (object->pass) {
-			varlena->pass = strlen(data);
-			varlena->pass_len = strlen(object->pass);
-			strcat(data, object->pass);
-		}
-	}
-	if (object->host) {
-		varlena->host = strlen(data);
-		varlena->host_len = strlen(object->host);
-		strcat(data, object->host);
-	}
-	if (object->port) {
-		port_str = portToString(object->port);
-		varlena->port = strlen(data);
-		varlena->port_len = strlen(port_str);
-		strcat(data, port_str);
-	}
-	if (object->path) {
-		varlena->path = strlen(data);
-		varlena->path_len = strlen(object->path);
-		strcat(data, object->path);
-	}
-	if (object->query) {
-		varlena->query = strlen(data);
-		varlena->query_len = strlen(object->query);
-		strcat(data, object->query);
-	}
-	if (object->fragment) {
-		varlena->fragment = strlen(data);
-		varlena->fragment_len = strlen(object->fragment);
-		strcat(data, object->fragment);
-	}
-
-#ifdef DEBUG
-  elog(NOTICE, "url_to_varlena: varlena->host=%d,varlena->host_len=%d,data=%s", varlena->host, varlena->host_len, data);
-#endif
-	memcpy(varlena->data, data, size);
-
-#ifdef DEBUG
-  elog(NOTICE, "url_to_varlena: varlena->data=%s", varlena->data);
-#endif
-	return varlena;
-}
-
-url* url_from_varlena (url_internal* varlena)
-{
-	url* object = palloc(sizeof(url));
-	char port_buf[7] = {0};
-
-	memset(object, 0, sizeof(url));
-
-#ifdef DEBUG
-  elog(NOTICE, "url_from_varlena (%d)", (int) sizeof(varlena));
-  elog(NOTICE, "url_from_varlena: varlena->data=%s varlena->host=%d", varlena->data, varlena->host);
-  elog(NOTICE, "url_from_varlena: varlena->host_len=%d", varlena->host_len);
-#endif
-
-	if (varlena->scheme_len) {
-		object->scheme = palloc(varlena->scheme_len+1);
-		memset(object->scheme, 0, varlena->scheme_len+1);
-		memcpy(object->scheme, (void *) (varlena->data + varlena->scheme), varlena->scheme_len);
-	}
-	if (varlena->user_len) {
-		object->user = palloc(varlena->user_len+1);
-		memset(object->user, 0, varlena->user_len+1);
-		memcpy(object->user, (void *) (varlena->data + varlena->user), varlena->user_len);
-		if (varlena->pass_len) {
-			object->pass = palloc(varlena->pass_len+1);
-			object->pass = palloc(varlena->pass_len+1);
-			memcpy(object->pass, (void *) (varlena->data + varlena->pass), varlena->pass_len);
-		}
-	}
-	if (varlena->host_len) {
-		object->host = palloc(varlena->host_len+1);
-		memset(object->host, 0, varlena->host_len+1);
-		memcpy(object->host, (void *) (varlena->data + varlena->host), varlena->host_len);
-	}
-	if (varlena->port_len) {
-		memcpy(port_buf, (void *) (varlena->data + varlena->port), varlena->port_len);
-		object->port = atoi(port_buf);
-	}
-	if (varlena->path_len) {
-		object->path = palloc(varlena->path_len+1);
-		memset(object->path, 0, varlena->path_len+1);
-		memcpy(object->path, (void *) (varlena->data + varlena->path), varlena->path_len);
-	}
-	if (varlena->query_len) {
-		object->query = palloc(varlena->query_len+1);
-		memset(object->query, 0, varlena->query_len+1);
-		memcpy(object->query, (void *) (varlena->data + varlena->query), varlena->query_len);
-	}
-	if (varlena->fragment_len) {
-		object->fragment = palloc(varlena->fragment_len+1);
-		memset(object->fragment, 0, varlena->fragment_len+1);
-		memcpy(object->fragment, (void *) (varlena->data + varlena->fragment), varlena->fragment_len);
-	}
-
-#ifdef DEBUG
-  elog(NOTICE, "url_from_varlena: object->host=%s", object->host);
-#endif
-
-	return object;
-}
-
-int url_size (url *object, int type)
-{
-	int	size = 0, size_out = 0;
-
-#ifdef DEBUG
-  elog(NOTICE, "url_size: object->host=%s", object->host);
-#endif
-
-	if (type == URL_SIZE_EMPTY) {
-		return sizeof(url);
-	} // In others types, the content will be counted
-	else {
-		if (object->scheme) {
-			size += (int) strlen(object->scheme);
-			size_out += 3; // ://
-		}
-		if (object->user) {
-			size += (int) strlen(object->user);
-			size_out += 1; // @
-		}
-		if (object->pass) {
-			size += (int) strlen(object->pass);
-			size_out += 1; // :
-		}
-		if (object->host) {
-			size += (int) strlen(object->host);
-		}
-		if (object->port) {
-			size += (int) object->port;
-			size_out += 1; // :
-		}
-		if (object->path) {
-			size += (int) strlen(object->path);
-		}
-		if (object->query) {
-			size += (int) strlen(object->query);
-			size_out += 1; // ?
-		}
-		if (object->fragment) {
-			size += (int) strlen(object->fragment);
-			size_out += 1; // #
-		}
-
-		if (type == URL_SIZE_CONTENTS) {
-			return (int) size;
-		} else if (type == URL_SIZE_TOTAL) {
-			return (int) size + sizeof(url);
-		} else if (type == URL_SIZE_CONTENTS_OUT) {
-			return (int) size + size_out;
-		}
-	}
-	return 0;
-}
-
-int url_internal_size (url_internal *url, int type)
-{
-	int	size = 0, size_out = 0;
-
-	if (type == URL_SIZE_EMPTY) {
-		return sizeof(url_internal);
-	} // In others types, the content will be counted
-	else {
-		if (url->scheme_len) {
-			size += url->scheme_len;
-			size_out += 3; // ://
-		}
-		if (url->user_len) {
-			size += url->user_len;
-			size_out += 1; // @
-		}
-		if (url->pass_len) {
-			size += url->pass_len;
-			size_out += 1; // :
-		}
-		if (url->host_len) {
-			size += url->host_len;
-		}
-		if (url->port_len) {
-			size += url->port_len;
-			size_out += 1; // :
-		}
-		if (url->path_len) {
-			size += url->path_len;
-		}
-		if (url->query_len) {
-			size += url->query_len;
-			size_out += 1; // ?
-		}
-		if (url->fragment_len) {
-			size += url->fragment_len;
-			size_out += 1; // #
-		}
-
-		if (type == URL_SIZE_CONTENTS) {
-			return (int) size;
-		} else if (type == URL_SIZE_CONTENTS_OUT) {
-			return (int) size + size_out;
-		}
-	}
-	return 0;
-}
-
-static inline struct varlena *make_varlena(url_internal *url)
-{
-	struct varlena *vdat;
-	int size;
-
-	size = sizeof(url_internal) + ((strlen(url->data)+1)*sizeof(char)) + VARHDRSZ;
-	vdat = palloc(size);
-	URL_SET_VARSIZE(vdat, size);
-	memcpy(URL_VARDATA(vdat), url, (size - VARHDRSZ));
-
-	return vdat;
 }
